@@ -40,6 +40,7 @@ import { useState } from 'react';
 
 import RecurringEventDialog from './components/RecurringEventDialog.tsx';
 import { useCalendarView } from './hooks/useCalendarView.ts';
+import { useDragAndDrop } from './hooks/useDragAndDrop.ts';
 import { useEventForm } from './hooks/useEventForm.ts';
 import { useEventOperations } from './hooks/useEventOperations.ts';
 import { useNotifications } from './hooks/useNotifications.ts';
@@ -156,6 +157,33 @@ function App() {
   const { notifications, notifiedEvents, setNotifications } = useNotifications(events);
   const { view, setView, currentDate, holidays, navigate } = useCalendarView();
   const { searchTerm, filteredEvents, setSearchTerm } = useSearch(events, currentDate, view);
+
+  // 드래그 앤 드롭 기능
+  const handleEventUpdate = async (
+    eventId: string,
+    updates: { date?: string; startTime?: string; endTime?: string }
+  ) => {
+    const event = events.find((e) => e.id === eventId);
+    if (!event) return;
+
+    const updatedEvent = {
+      ...event,
+      ...updates,
+    };
+
+    await saveEvent(updatedEvent);
+  };
+
+  const { dragState, handleDragStart, handleDragEnd, handleDrop, handleDragOver } =
+    useDragAndDrop(handleEventUpdate);
+
+  // 날짜 클릭 핸들러
+  const handleDateCellClick = (date: string) => {
+    if (!editingEvent) {
+      // 편집 중이 아닐 때만 날짜 설정
+      setDate(date);
+    }
+  };
 
   const [isOverlapDialogOpen, setIsOverlapDialogOpen] = useState(false);
   const [overlappingEvents, setOverlappingEvents] = useState<Event[]>([]);
@@ -308,37 +336,53 @@ function App() {
             </TableHead>
             <TableBody>
               <TableRow>
-                {weekDates.map((date) => (
-                  <TableCell
-                    key={date.toISOString()}
-                    sx={{
-                      height: '120px',
-                      verticalAlign: 'top',
-                      width: '14.28%',
-                      padding: 1,
-                      border: '1px solid #e0e0e0',
-                      overflow: 'hidden',
-                    }}
-                  >
+                {weekDates.map((date) => {
+                  const dateString = formatDate(currentDate, date.getDate());
+                  return (
+                    <TableCell
+                      key={date.toISOString()}
+                      data-date={dateString}
+                      onClick={() => handleDateCellClick(dateString)}
+                      onDrop={handleDrop}
+                      onDragOver={handleDragOver}
+                      sx={{
+                        height: '120px',
+                        verticalAlign: 'top',
+                        width: '14.28%',
+                        padding: 1,
+                        border: '1px solid #e0e0e0',
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        '&:hover': {
+                          backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                        },
+                      }}
+                    >
                     <Typography variant="body2" fontWeight="bold">
                       {date.getDate()}
                     </Typography>
-                    {filteredEvents
-                      .filter(
-                        (event) => new Date(event.date).toDateString() === date.toDateString()
-                      )
-                      .map((event) => {
-                        const isNotified = notifiedEvents.includes(event.id);
-                        const isRepeating = event.repeat.type !== 'none';
+                      {filteredEvents
+                        .filter(
+                          (event) => new Date(event.date).toDateString() === date.toDateString()
+                        )
+                        .map((event) => {
+                          const isNotified = notifiedEvents.includes(event.id);
+                          const isRepeating = event.repeat.type !== 'none';
 
-                        return (
-                          <Box
-                            key={event.id}
-                            sx={{
-                              ...eventBoxStyles.common,
-                              ...(isNotified ? eventBoxStyles.notified : eventBoxStyles.normal),
-                            }}
-                          >
+                          return (
+                            <Box
+                              key={event.id}
+                              className="event-box"
+                              draggable
+                              onDragStart={(e) => handleDragStart(event, e)}
+                              onDragEnd={handleDragEnd}
+                              sx={{
+                                ...eventBoxStyles.common,
+                                ...(isNotified ? eventBoxStyles.notified : eventBoxStyles.normal),
+                                cursor: dragState.isDragging && dragState.event?.id === event.id ? 'grabbing' : 'grab',
+                                opacity: dragState.isDragging && dragState.event?.id === event.id ? 0.5 : 1,
+                              }}
+                            >
                             <Stack direction="row" spacing={1} alignItems="center">
                               {isNotified && <Notifications fontSize="small" />}
                               {/* ! TEST CASE */}
@@ -361,9 +405,10 @@ function App() {
                             </Stack>
                           </Box>
                         );
-                      })}
-                  </TableCell>
-                ))}
+                            })}
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             </TableBody>
           </Table>
@@ -399,6 +444,10 @@ function App() {
                     return (
                       <TableCell
                         key={dayIndex}
+                        data-date={dateString}
+                        onClick={() => day && handleDateCellClick(dateString)}
+                        onDrop={handleDrop}
+                        onDragOver={handleDragOver}
                         sx={{
                           height: '120px',
                           verticalAlign: 'top',
@@ -407,6 +456,12 @@ function App() {
                           border: '1px solid #e0e0e0',
                           overflow: 'hidden',
                           position: 'relative',
+                          cursor: day ? 'pointer' : 'default',
+                          '&:hover': day
+                            ? {
+                                backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                              }
+                            : {},
                         }}
                       >
                         {day && (
@@ -426,6 +481,11 @@ function App() {
                               return (
                                 <Box
                                   key={event.id}
+                                  className="event-box"
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(event, e)}
+                                  onDragEnd={handleDragEnd}
+                                  onClick={(e) => e.stopPropagation()}
                                   sx={{
                                     p: 0.5,
                                     my: 0.5,
@@ -436,6 +496,8 @@ function App() {
                                     minHeight: '18px',
                                     width: '100%',
                                     overflow: 'hidden',
+                                    cursor: dragState.isDragging && dragState.event?.id === event.id ? 'grabbing' : 'grab',
+                                    opacity: dragState.isDragging && dragState.event?.id === event.id ? 0.5 : 1,
                                   }}
                                 >
                                   <Stack direction="row" spacing={1} alignItems="center">
